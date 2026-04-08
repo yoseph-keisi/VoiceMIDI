@@ -6,8 +6,8 @@ class AppState: ObservableObject {
     let audioEngine: AudioEngine
     let midiEngine: MIDIEngine
     let noteTracker: NoteTracker
-    let scaleQuantizer: ScaleQuantizer
-    let midiConfig: MIDIConfig
+    @Published var scaleQuantizer: ScaleQuantizer
+    @Published var midiConfig: MIDIConfig
     let deviceManager = AudioDeviceManager()
 
     @Published var selectedDevice: AudioDeviceManager.AudioDevice?
