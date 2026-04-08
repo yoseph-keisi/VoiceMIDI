@@ -479,28 +479,39 @@ let uiState = {
 function trackerProcess(rawFreq, confidence, rms) {
   const alpha = params.smoothingAlpha;
 
-  // EMA frequency smoothing
-  if (rawFreq > 0 && confidence > 0.5) {
-    smoothedFreq = smoothedFreq === 0 ? rawFreq : alpha * rawFreq + (1 - alpha) * smoothedFreq;
-  }
-
-  // ── Octave error correction ──────────────────────────────────────────────
-  // YIN on a voiced signal frequently jumps to ÷2 or ÷3 of the true frequency
-  // (it finds the period of a harmonic instead of the fundamental).
-  // When already sounding, check if the smoothed frequency is close to a simple
-  // divisor of the expected frequency and multiply back up.
+  // ── Step 1: Octave-correct the RAW frequency BEFORE EMA ─────────────────
+  // Critical ordering: EMA must receive the corrected value. If we correct
+  // after EMA, a ÷2 error blends smoothedFreq down to an intermediate value
+  // (e.g. 165 Hz instead of 220 Hz), and 165×2=330 Hz is too far from the
+  // reference to trigger correction — the error compounds every frame.
+  //
+  // Reference: use smoothedFreq (continuity) when available, else sounding
+  // note's Hz. Both cover the same case; smoothedFreq is more robust during
+  // pitch slides where we're moving away from the note center.
   uiState.octaveFix = '—';
-  if (params.octaveCorrection && smoothedFreq > 0 && trackerState.type === 'sounding') {
-    const refFreq = 440 * Math.pow(2, (trackerState.note - 69) / 12);
-    for (const mult of [2, 3, 4]) {
-      const ratio = (smoothedFreq * mult) / refFreq;
-      // Accept if corrected frequency lands within ±35 cents of the reference
-      if (Math.abs(1200 * Math.log2(ratio)) < 35) {
-        smoothedFreq *= mult;
-        uiState.octaveFix = '÷' + mult + ' → ×' + mult;
-        break;
+  let inputFreq = rawFreq;  // what we'll feed into EMA
+
+  if (params.octaveCorrection && rawFreq > 0 && confidence > 0.5) {
+    const refFreq = smoothedFreq > 0 ? smoothedFreq
+      : trackerState.type === 'sounding' ? 440 * Math.pow(2, (trackerState.note - 69) / 12)
+      : 0;
+
+    if (refFreq > 0) {
+      for (const mult of [2, 3, 4]) {
+        const corrected = rawFreq * mult;
+        const cents = Math.abs(1200 * Math.log2(corrected / refFreq));
+        if (cents < 70) {   // within 70 cents of reference after correction
+          inputFreq = corrected;
+          uiState.octaveFix = '÷' + mult + ' → ×' + mult;
+          break;
+        }
       }
     }
+  }
+
+  // ── Step 2: EMA on corrected frequency ──────────────────────────────────
+  if (inputFreq > 0 && confidence > 0.5) {
+    smoothedFreq = smoothedFreq === 0 ? inputFreq : alpha * inputFreq + (1 - alpha) * smoothedFreq;
   }
 
   uiState.rawFreq = rawFreq;

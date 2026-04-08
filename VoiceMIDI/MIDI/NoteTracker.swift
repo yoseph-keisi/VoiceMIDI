@@ -39,11 +39,39 @@ class NoteTracker {
         let channel = midiConfig.midiChannel
         let alpha = midiConfig.frequencySmoothingAlpha
 
-        // Update smoothed frequency only when YIN gives a valid reading
+        // ── Step 1: Octave-correct RAW frequency BEFORE EMA ─────────────────────
+        // YIN on a voiced signal latches onto harmonic periods (÷2, ÷3 of true freq).
+        // Correcting after EMA is too late — EMA already blends the wrong value down
+        // to an intermediate frequency where ×mult no longer lands near the reference.
+        // Reference: use smoothedFrequency (continuity) when available, else the
+        // current note's Hz when sounding.
+        var inputFrequency = frequency
         if frequency > 0 && confidence > 0.5 {
+            let refFreq: Float
+            if smoothedFrequency > 0 {
+                refFreq = smoothedFrequency
+            } else if case .sounding(let note) = state {
+                refFreq = Float(440.0 * pow(2.0, Double(note - 69) / 12.0))
+            } else {
+                refFreq = 0
+            }
+            if refFreq > 0 {
+                for mult in [2, 3, 4] {
+                    let corrected = frequency * Float(mult)
+                    let cents = abs(1200.0 * Float(log2(Double(corrected / refFreq))))
+                    if cents < 70.0 {
+                        inputFrequency = corrected
+                        break
+                    }
+                }
+            }
+        }
+
+        // ── Step 2: EMA on corrected frequency ──────────────────────────────────
+        if inputFrequency > 0 && confidence > 0.5 {
             smoothedFrequency = smoothedFrequency == 0
-                ? frequency
-                : alpha * frequency + (1 - alpha) * smoothedFrequency
+                ? inputFrequency
+                : alpha * inputFrequency + (1 - alpha) * smoothedFrequency
         }
 
         switch state {
@@ -110,19 +138,6 @@ class NoteTracker {
             }
 
             guard smoothedFrequency > 0 else { return }
-
-            // ── Octave error correction ──────────────────────────────────────
-            // YIN on a voiced signal can latch onto ÷2 or ÷3 of the true frequency.
-            // If correcting by ×mult lands within 35 cents of the current note, apply it.
-            let refFreq = Float(440.0 * pow(2.0, Double(currentNote - 69) / 12.0))
-            for mult in [2, 3, 4] {
-                let corrected = smoothedFrequency * Float(mult)
-                let centsDiff = abs(1200.0 * Float(log2(Double(corrected / refFreq))))
-                if centsDiff < 35.0 {
-                    smoothedFrequency = corrected
-                    break
-                }
-            }
 
             // Deviation in semitones from the currently sounding note
             let exactNote = Float(69.0 + 12.0 * log2(Double(smoothedFrequency) / 440.0))
