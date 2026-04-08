@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VoiceMIDI Test Bench</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0D0D0F;
+    color: #E8E6E3;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', sans-serif;
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: #1A1A1E;
+    border-bottom: 1px solid #2a2a2e;
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 15px; font-weight: 600; }
+  #start-btn {
+    background: #E8A84C;
+    color: #0D0D0F;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #start-btn:hover { background: #f0b85e; }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #444;
+    flex-shrink: 0;
+  }
+  #status-dot.active { background: #4caf50; }
+
+  /* ── Meters row ── */
+  #meters {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+    padding: 8px 16px;
+    background: #111113;
+    border-bottom: 1px solid #2a2a2e;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .meter-group { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+  .meter-label { font-size: 10px; color: #8A8A8E; text-transform: uppercase; letter-spacing: 0.5px; }
+  .meter-value { font-size: 14px; font-family: 'SF Mono', 'Consolas', monospace; color: #E8E6E3; }
+  .meter-value.accent { color: #E8A84C; }
+  .meter-value.dim { color: #555; }
+
+  /* Pitch bend bar */
+  #bend-bar-wrap {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 180px;
+  }
+  #bend-bar-track {
+    width: 180px; height: 10px;
+    background: #222;
+    border-radius: 5px;
+    position: relative;
+    overflow: hidden;
+  }
+  #bend-bar-center {
+    position: absolute;
+    left: 50%; top: 0;
+    width: 1px; height: 100%;
+    background: #444;
+  }
+  #bend-bar-fill {
+    position: absolute;
+    top: 0; height: 100%;
+    background: #E8A84C;
+    border-radius: 5px;
+    transition: all 0.03s linear;
+  }
+
+  /* RMS bar */
+  #rms-bar-track {
+    width: 120px; height: 10px;
+    background: #222;
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  #rms-bar-fill {
+    height: 100%;
+    background: #4caf50;
+    border-radius: 5px;
+    width: 0%;
+    transition: width 0.03s linear;
+  }
+
+  /* ── Piano roll ── */
+  #piano-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+  }
+  #piano-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── Scale presets ── */
+  #presets {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px;
+    background: #111113;
+    border-top: 1px solid #2a2a2e;
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  #presets::-webkit-scrollbar { display: none; }
+  .preset-chip {
+    background: #1A1A1E;
+    border: 1px solid #333;
+    color: #E8E6E3;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .preset-chip:hover { border-color: #E8A84C; color: #E8A84C; }
+  .preset-chip.active { background: #E8A84C; border-color: #E8A84C; color: #0D0D0F; font-weight: 600; }
+
+  /* ── Parameters panel ── */
+  #params {
+    background: #1A1A1E;
+    border-top: 1px solid #2a2a2e;
+    padding: 8px 16px;
+    flex-shrink: 0;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .param-group { display: flex; flex-direction: column; gap: 3px; }
+  .param-label { font-size: 10px; color: #8A8A8E; }
+  .param-value-label { font-size: 11px; color: #E8A84C; font-family: monospace; }
+  input[type=range] {
+    width: 110px; height: 4px;
+    accent-color: #E8A84C;
+    cursor: pointer;
+  }
+  .toggle-btn {
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #888;
+    padding: 3px 10px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .toggle-btn.on { background: #E8A84C22; border-color: #E8A84C; color: #E8A84C; }
+
+  /* Note state badge */
+  #note-state {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: #222;
+    color: #555;
+    letter-spacing: 1px;
+  }
+  #note-state.sounding {
+    background: #E8A84C22;
+    color: #E8A84C;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <h1>VoiceMIDI Test Bench</h1>
+  <button id="start-btn" onclick="toggleAudio()">Start Mic</button>
+  <div id="status-dot"></div>
+  <span id="status-text" style="color:#8A8A8E; font-size:12px;">Mic off</span>
+  <span id="note-state">SILENT</span>
+</div>
+
+<!-- Meters -->
+<div id="meters">
+  <div class="meter-group">
+    <div class="meter-label">Raw Freq</div>
+    <div class="meter-value" id="m-raw-freq">— Hz</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Smoothed</div>
+    <div class="meter-value accent" id="m-smooth-freq">— Hz</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Exact MIDI</div>
+    <div class="meter-value" id="m-exact-note">—</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Quantized</div>
+    <div class="meter-value accent" id="m-quant-note">—</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Deviation</div>
+    <div class="meter-value" id="m-deviation">— ¢</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Confidence</div>
+    <div class="meter-value" id="m-conf">—</div>
+  </div>
+  <div id="bend-bar-wrap">
+    <div class="meter-label">Pitch Bend <span id="bend-val-label" style="color:#E8A84C; font-family:monospace">0¢</span></div>
+    <div id="bend-bar-track">
+      <div id="bend-bar-center"></div>
+      <div id="bend-bar-fill"></div>
+    </div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">RMS</div>
+    <div id="rms-bar-track"><div id="rms-bar-fill"></div></div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Onset frames</div>
+    <div class="meter-value" id="m-onset-count">0</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Release frames</div>
+    <div class="meter-value" id="m-release-count">0</div>
+  </div>
+  <div class="meter-group">
+    <div class="meter-label">Octave fix</div>
+    <div class="meter-value" id="m-octave-fix" style="color:#555">—</div>
+  </div>
+</div>
+
+<!-- Piano Roll -->
+<div id="piano-wrap">
+  <canvas id="piano-canvas"></canvas>
+</div>
+
+<!-- Scale Presets -->
+<div id="presets"></div>
+
+<!-- Parameters -->
+<div id="params">
+  <div class="param-group">
+    <div class="param-label">Smoothing α <span class="param-value-label" id="lbl-smooth">0.45</span></div>
+    <input type="range" id="p-smooth" min="0.1" max="1.0" step="0.05" value="0.45"
+      oninput="params.smoothingAlpha=+this.value; document.getElementById('lbl-smooth').textContent=this.value">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Onset threshold <span class="param-value-label" id="lbl-onset">0.010</span></div>
+    <input type="range" id="p-onset" min="0.001" max="0.05" step="0.001" value="0.010"
+      oninput="params.onsetThreshold=+this.value; document.getElementById('lbl-onset').textContent=(+this.value).toFixed(3)">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Release threshold <span class="param-value-label" id="lbl-release">0.006</span></div>
+    <input type="range" id="p-release" min="0.001" max="0.05" step="0.001" value="0.006"
+      oninput="params.releaseThreshold=+this.value; document.getElementById('lbl-release').textContent=(+this.value).toFixed(3)">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Confidence <span class="param-value-label" id="lbl-conf">0.80</span></div>
+    <input type="range" id="p-conf" min="0.4" max="1.0" step="0.01" value="0.80"
+      oninput="params.confidenceThreshold=+this.value; document.getElementById('lbl-conf').textContent=(+this.value).toFixed(2)">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Retrigger semitones <span class="param-value-label" id="lbl-retrig">1.50</span></div>
+    <input type="range" id="p-retrig" min="0.3" max="4.0" step="0.1" value="1.5"
+      oninput="params.retriggerThreshold=+this.value; document.getElementById('lbl-retrig').textContent=(+this.value).toFixed(2)">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Bend dead zone ¢ <span class="param-value-label" id="lbl-dead">12</span></div>
+    <input type="range" id="p-dead" min="0" max="50" step="1" value="12"
+      oninput="params.bendDeadZone=+this.value/100; document.getElementById('lbl-dead').textContent=this.value">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Release hold frames <span class="param-value-label" id="lbl-rhold">6</span></div>
+    <input type="range" id="p-rhold" min="1" max="30" step="1" value="6"
+      oninput="params.releaseHoldFrames=+this.value; document.getElementById('lbl-rhold').textContent=this.value">
+  </div>
+  <div class="param-group">
+    <div class="param-label">Retrig debounce frames <span class="param-value-label" id="lbl-rdeb">3</span></div>
+    <input type="range" id="p-rdeb" min="1" max="15" step="1" value="3"
+      oninput="params.retriggerDebounceFrames=+this.value; document.getElementById('lbl-rdeb').textContent=this.value">
+  </div>
+  <div class="param-group" style="justify-content:flex-end">
+    <div class="param-label">Glide mode</div>
+    <button class="toggle-btn" id="btn-glide" onclick="params.glideMode=!params.glideMode; this.classList.toggle('on')">OFF</button>
+  </div>
+  <div class="param-group" style="justify-content:flex-end">
+    <div class="param-label">Octave correction</div>
+    <button class="toggle-btn on" id="btn-octave" onclick="params.octaveCorrection=!params.octaveCorrection; this.classList.toggle('on'); this.textContent=params.octaveCorrection?'ON':'OFF'">ON</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// PARAMETERS (mirrors MIDIConfig.swift)
+// ═══════════════════════════════════════════════════════════════
+const params = {
+  smoothingAlpha: 0.45,
+  onsetThreshold: 0.010,
+  releaseThreshold: 0.006,
+  confidenceThreshold: 0.80,
+  retriggerThreshold: 1.5,
+  bendDeadZone: 0.12,      // semitones
+  releaseHoldFrames: 6,
+  retriggerDebounceFrames: 3,
+  pitchBendRangeSemitones: 2,
+  glideMode: false,
+  octaveCorrection: true,  // correct ÷2 / ÷3 subharmonic YIN errors
+};
+
+// ═══════════════════════════════════════════════════════════════
+// SCALE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════
+const SCALES = {
+  'Chromatic':        [0,1,2,3,4,5,6,7,8,9,10,11],
+  'Major':            [0,2,4,5,7,9,11],
+  'Natural Minor':    [0,2,3,5,7,8,10],
+  'Harmonic Minor':   [0,2,3,5,7,8,11],
+  'Melodic Minor':    [0,2,3,5,7,9,11],
+  'Maj Pentatonic':   [0,2,4,7,9],
+  'Min Pentatonic':   [0,3,5,7,10],
+  'Blues':            [0,3,5,6,7,10],
+  'Dorian':           [0,2,3,5,7,9,10],
+  'Mixolydian':       [0,2,4,5,7,9,10],
+  'Phrygian':         [0,1,3,5,7,8,10],
+  'Hijaz':            [0,1,4,5,7,8,11],
+};
+
+let enabledNotes = new Set([0,1,2,3,4,5,6,7,8,9,10,11]); // chromatic
+let rootNote = 0;
+let activePreset = 'Chromatic';
+
+function applyPreset(name) {
+  activePreset = name;
+  const intervals = SCALES[name];
+  enabledNotes = new Set(intervals.map(i => (i + rootNote) % 12));
+  document.querySelectorAll('.preset-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.preset === name);
+  });
+}
+
+// Build preset chips
+const presetsEl = document.getElementById('presets');
+Object.keys(SCALES).forEach(name => {
+  const chip = document.createElement('button');
+  chip.className = 'preset-chip' + (name === 'Chromatic' ? ' active' : '');
+  chip.dataset.preset = name;
+  chip.textContent = name;
+  chip.onclick = () => applyPreset(name);
+  presetsEl.appendChild(chip);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// YIN PITCH DETECTION
+// ═══════════════════════════════════════════════════════════════
+function yinDetect(buffer, sampleRate, threshold = 0.12) {
+  const bufSize = buffer.length;
+  const halfSize = Math.floor(bufSize / 2);
+  const d = new Float32Array(halfSize);
+
+  // Step 1: Difference function
+  for (let tau = 0; tau < halfSize; tau++) {
+    let sum = 0;
+    for (let i = 0; i < halfSize; i++) {
+      const delta = buffer[i] - buffer[i + tau];
+      sum += delta * delta;
+    }
+    d[tau] = sum;
+  }
+
+  // Step 2: Cumulative mean normalized difference
+  d[0] = 1;
+  let runningSum = 0;
+  for (let tau = 1; tau < halfSize; tau++) {
+    runningSum += d[tau];
+    d[tau] = runningSum > 0 ? d[tau] * tau / runningSum : 1;
+  }
+
+  // Step 3: Absolute threshold search
+  let tau = -1;
+  for (let t = 2; t < halfSize; t++) {
+    if (d[t] < threshold) {
+      while (t + 1 < halfSize && d[t + 1] < d[t]) t++;
+      tau = t;
+      break;
+    }
+  }
+  if (tau === -1) {
+    let minVal = Infinity, minTau = 2;
+    for (let t = 2; t < halfSize; t++) {
+      if (d[t] < minVal) { minVal = d[t]; minTau = t; }
+    }
+    tau = minTau;
+  }
+
+  // Step 4: Parabolic interpolation
+  if (tau > 0 && tau < halfSize - 1) {
+    const s0 = d[tau - 1], s1 = d[tau], s2 = d[tau + 1];
+    const denom = 2 * s1 - s0 - s2;
+    if (Math.abs(denom) > 1e-7) tau += 0.5 * (s0 - s2) / denom;
+  }
+
+  const intTau = Math.max(0, Math.min(halfSize - 1, Math.round(tau)));
+  const probability = Math.max(0, Math.min(1, 1 - d[intTau]));
+  const frequency = sampleRate / tau;
+
+  return { frequency, probability };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SCALE QUANTIZER (mirrors ScaleQuantizer.swift)
+// ═══════════════════════════════════════════════════════════════
+function freqToMidi(freq) {
+  return 69 + 12 * Math.log2(freq / 440);
+}
+
+function quantize(freq) {
+  if (freq <= 0) return { note: 60, bend: 0 };
+  const exactNote = freqToMidi(freq);
+  const rawMidi = Math.round(exactNote);
+  const quantized = quantizeNote(rawMidi);
+  const bendSemitones = exactNote - quantized;
+  return { note: quantized, bend: bendSemitones };
+}
+
+function quantizeNote(midiNote) {
+  const pc = ((midiNote % 12) + 12) % 12;
+  const rel = ((pc - rootNote) + 12) % 12;
+  if (enabledNotes.has(rel)) return midiNote;
+  for (let d = 1; d <= 12; d++) {
+    const up = (rel + d) % 12, down = ((rel - d) + 12) % 12;
+    if (enabledNotes.has(up)) return midiNote + d;
+    if (enabledNotes.has(down)) return midiNote - d;
+  }
+  return midiNote;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NOTE TRACKER STATE MACHINE (mirrors NoteTracker.swift)
+// ═══════════════════════════════════════════════════════════════
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+let trackerState = { type: 'silent' };
+let smoothedFreq = 0;
+let onsetCount = 0, onsetNote = 0;
+let releaseCount = 0;
+let noteChangeCount = 0, noteChangePending = 0;
+let lastBend = 8192;
+
+// Visible state for UI
+let uiState = {
+  rawFreq: 0, smoothedFreq: 0, confidence: 0, rms: 0,
+  exactNote: 0, quantNote: 0, deviationCents: 0,
+  midiNote: null, bendValue: 8192, noteStateName: 'SILENT',
+  onsetCount: 0, releaseCount: 0,
+};
+
+function trackerProcess(rawFreq, confidence, rms) {
+  const alpha = params.smoothingAlpha;
+
+  // EMA frequency smoothing
+  if (rawFreq > 0 && confidence > 0.5) {
+    smoothedFreq = smoothedFreq === 0 ? rawFreq : alpha * rawFreq + (1 - alpha) * smoothedFreq;
+  }
+
+  // ── Octave error correction ──────────────────────────────────────────────
+  // YIN on a voiced signal frequently jumps to ÷2 or ÷3 of the true frequency
+  // (it finds the period of a harmonic instead of the fundamental).
+  // When already sounding, check if the smoothed frequency is close to a simple
+  // divisor of the expected frequency and multiply back up.
+  uiState.octaveFix = '—';
+  if (params.octaveCorrection && smoothedFreq > 0 && trackerState.type === 'sounding') {
+    const refFreq = 440 * Math.pow(2, (trackerState.note - 69) / 12);
+    for (const mult of [2, 3, 4]) {
+      const ratio = (smoothedFreq * mult) / refFreq;
+      // Accept if corrected frequency lands within ±35 cents of the reference
+      if (Math.abs(1200 * Math.log2(ratio)) < 35) {
+        smoothedFreq *= mult;
+        uiState.octaveFix = '÷' + mult + ' → ×' + mult;
+        break;
+      }
+    }
+  }
+
+  uiState.rawFreq = rawFreq;
+  uiState.smoothedFreq = smoothedFreq;
+  uiState.confidence = confidence;
+  uiState.rms = rms;
+  uiState.onsetCount = onsetCount;
+  uiState.releaseCount = releaseCount;
+
+  if (smoothedFreq > 0) {
+    const exact = freqToMidi(smoothedFreq);
+    const { note: qNote, bend: bendST } = quantize(smoothedFreq);
+    uiState.exactNote = exact;
+    uiState.quantNote = qNote;
+    uiState.deviationCents = bendST * 100;
+  }
+
+  switch (trackerState.type) {
+    case 'silent': {
+      releaseCount = 0;
+      const valid = smoothedFreq > 0 && confidence > params.confidenceThreshold;
+      const loud = rms > params.onsetThreshold;
+      if (!valid || !loud) { onsetCount = 0; onsetNote = 0; break; }
+
+      const { note } = quantize(smoothedFreq);
+      if (note === onsetNote) { onsetCount++; }
+      else { onsetNote = note; onsetCount = 1; }
+
+      uiState.onsetCount = onsetCount;
+
+      if (onsetCount >= 3) {
+        trackerState = { type: 'sounding', note: onsetNote };
+        lastBend = 8192;
+        onsetCount = 0;
+        noteChangeCount = 0;
+        noteChangePending = 0;
+        smoothedFreq = rawFreq; // re-anchor
+      }
+      break;
+    }
+
+    case 'sounding': {
+      const currentNote = trackerState.note;
+      const confRelease = confidence < params.confidenceThreshold * 0.60;
+      const rmsRelease = rms < params.releaseThreshold;
+
+      if (confRelease || rmsRelease) {
+        releaseCount++;
+        uiState.releaseCount = releaseCount;
+        if (releaseCount >= params.releaseHoldFrames) {
+          trackerState = { type: 'silent' };
+          smoothedFreq = 0;
+          lastBend = 8192;
+          onsetCount = 0; noteChangeCount = 0; noteChangePending = 0;
+        }
+        uiState.midiNote = currentNote;
+        uiState.bendValue = lastBend;
+        uiState.noteStateName = 'SOUNDING';
+        break;
+      } else {
+        releaseCount = 0;
+      }
+
+      if (smoothedFreq <= 0) { uiState.midiNote = currentNote; break; }
+
+      const exactNote = freqToMidi(smoothedFreq);
+      const deviation = exactNote - currentNote;  // in semitones
+
+      // Pitch bend with dead zone
+      const dead = params.bendDeadZone;
+      let targetBend;
+      if (Math.abs(deviation) < dead) {
+        targetBend = 8192;
+      } else {
+        const adj = deviation > 0 ? deviation - dead : deviation + dead;
+        const range = params.pitchBendRangeSemitones;
+        const clamped = Math.max(-range, Math.min(range, adj));
+        targetBend = Math.round(8192 + (clamped / range) * 8191);
+        targetBend = Math.max(0, Math.min(16383, targetBend));
+      }
+
+      // Smooth the bend (2:1 IIR)
+      const newBend = Math.round((lastBend * 2 + targetBend) / 3);
+      lastBend = newBend;
+
+      uiState.midiNote = currentNote;
+      uiState.bendValue = newBend;
+      uiState.bendSemitones = deviation;
+
+      // Note change
+      if (!params.glideMode && Math.abs(deviation) >= params.retriggerThreshold) {
+        const { note: newNote } = quantize(smoothedFreq);
+        if (newNote !== currentNote) {
+          if (newNote === noteChangePending) { noteChangeCount++; }
+          else { noteChangePending = newNote; noteChangeCount = 1; }
+          if (noteChangeCount >= params.retriggerDebounceFrames) {
+            trackerState = { type: 'sounding', note: newNote };
+            lastBend = 8192;
+            noteChangeCount = 0;
+            noteChangePending = 0;
+          }
+        } else {
+          noteChangeCount = 0; noteChangePending = 0;
+        }
+      } else {
+        noteChangeCount = 0; noteChangePending = 0;
+      }
+
+      break;
+    }
+  }
+
+  uiState.noteStateName = trackerState.type === 'sounding' ? 'SOUNDING' : 'SILENT';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PIANO ROLL CANVAS
+// ═══════════════════════════════════════════════════════════════
+const canvas = document.getElementById('piano-canvas');
+const ctx = canvas.getContext('2d');
+
+const START_NOTE = 36;  // C2
+const END_NOTE = 96;    // C7
+
+// Semitone → fractional white-key position within an octave
+const SEMI_TO_WHITE = [0, 0.5, 1, 1.5, 2, 3, 3.5, 4, 4.5, 5, 5.5, 6];
+const IS_WHITE = [true,false,true,false,true,true,false,true,false,true,false,true];
+
+function noteToX(midiNote, width) {
+  const octave = Math.floor(midiNote / 12) - 2;  // relative to C2 (MIDI 36 = C2, octave 2 in MIDI terms)
+  const pc = ((midiNote % 12) + 12) % 12;
+  const startOctave = Math.floor(START_NOTE / 12);
+  const relOctave = Math.floor(midiNote / 12) - startOctave;
+  const whiteKeysPerOctave = 7;
+  const totalWhiteKeys = (END_NOTE - START_NOTE) / 12 * 7 + 1; // approximate
+  const whiteW = width / totalWhiteKeys;
+  return (relOctave * whiteKeysPerOctave + SEMI_TO_WHITE[pc]) * whiteW;
+}
+
+function fractionalNoteToX(exactMidi, width) {
+  const floor = Math.floor(exactMidi);
+  const ceil = Math.ceil(exactMidi);
+  const frac = exactMidi - floor;
+  const x0 = noteToX(floor, width);
+  const x1 = noteToX(ceil, width);
+  return x0 + (x1 - x0) * frac;
+}
+
+// Count white keys from START_NOTE to END_NOTE
+function countWhiteKeys() {
+  let count = 0;
+  for (let n = START_NOTE; n <= END_NOTE; n++) {
+    if (IS_WHITE[n % 12]) count++;
+  }
+  return count;
+}
+
+function drawPiano() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const totalWhite = countWhiteKeys();
+  const wkW = W / totalWhite;
+  const bkW = wkW * 0.62;
+  const bkH = H * 0.62;
+
+  // ── Draw white keys ──
+  let wi = 0;
+  for (let n = START_NOTE; n <= END_NOTE; n++) {
+    if (!IS_WHITE[n % 12]) continue;
+    const x = wi * wkW;
+    const pc = n % 12;
+    const rel = ((pc - rootNote) + 12) % 12;
+    const inScale = enabledNotes.has(rel);
+    const isCurrentNote = trackerState.type === 'sounding' && trackerState.note === n;
+
+    // Fill
+    if (isCurrentNote) {
+      ctx.fillStyle = '#E8A84C';
+    } else if (inScale) {
+      ctx.fillStyle = '#2d2a1e';
+    } else {
+      ctx.fillStyle = '#D4D2CF';
+    }
+    ctx.fillRect(x + 0.5, 0, wkW - 1, H);
+
+    // Border
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(x + 0.5, 0, wkW - 1, H);
+
+    // Note name on C keys
+    if (pc === 0) {
+      ctx.fillStyle = isCurrentNote ? '#0D0D0F' : inScale ? '#E8A84C' : '#777';
+      ctx.font = `${Math.max(9, wkW * 0.35)}px -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(NOTE_NAMES[pc] + Math.floor(n / 12 - 1), x + wkW / 2, H - 6);
+    }
+
+    wi++;
+  }
+
+  // ── Draw black keys (on top) ──
+  wi = 0;
+  for (let n = START_NOTE; n <= END_NOTE; n++) {
+    if (!IS_WHITE[n % 12]) { continue; }
+    const pc = n % 12;
+    // Does this white key have a black key above it?
+    const hasBlack = [0, 1, 3, 4, 5].includes([0,2,4,5,7,9,11].indexOf(pc)); // C,D,F,G,A
+    const whiteHasSharp = pc === 0 || pc === 2 || pc === 5 || pc === 7 || pc === 9; // C D F G A
+    if (whiteHasSharp && n + 1 <= END_NOTE) {
+      const blackNote = n + 1;
+      const bpc = blackNote % 12;
+      const brel = ((bpc - rootNote) + 12) % 12;
+      const inScale = enabledNotes.has(brel);
+      const isCurrentNote = trackerState.type === 'sounding' && trackerState.note === blackNote;
+      const bx = (wi + SEMI_TO_WHITE[bpc] - SEMI_TO_WHITE[pc]) * wkW - bkW / 2;
+
+      if (isCurrentNote) {
+        ctx.fillStyle = '#E8A84C';
+      } else if (inScale) {
+        ctx.fillStyle = '#3a3010';
+      } else {
+        ctx.fillStyle = '#1e1e20';
+      }
+      ctx.fillRect(bx, 0, bkW, bkH);
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(bx, 0, bkW, bkH);
+    }
+    wi++;
+  }
+
+  // ── Pitch indicator line ──
+  const pitchFreq = uiState.smoothedFreq;
+  if (pitchFreq > 0) {
+    const exactMidi = freqToMidi(pitchFreq);
+    if (exactMidi >= START_NOTE - 1 && exactMidi <= END_NOTE + 1) {
+      const px = fractionalNoteToX(exactMidi, W);
+
+      // Glow
+      const grd = ctx.createLinearGradient(px - 10, 0, px + 10, 0);
+      grd.addColorStop(0, 'transparent');
+      grd.addColorStop(0.5, 'rgba(232,168,76,0.4)');
+      grd.addColorStop(1, 'transparent');
+      ctx.fillStyle = grd;
+      ctx.fillRect(px - 10, 0, 20, H);
+
+      // Line
+      ctx.strokeStyle = '#E8A84C';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, H);
+      ctx.stroke();
+    }
+  }
+
+  // ── Quantized note highlight (subtle top bar) ──
+  if (uiState.midiNote !== null && trackerState.type === 'sounding') {
+    const qx = noteToX(uiState.midiNote, W);
+    const qpc = uiState.midiNote % 12;
+    const totalWhiteForWidth = countWhiteKeys();
+    const whiteW = W / totalWhiteForWidth;
+    const noteW = IS_WHITE[qpc] ? whiteW : whiteW * 0.62;
+    ctx.fillStyle = 'rgba(232,168,76,0.15)';
+    ctx.fillRect(qx - noteW / 2, 0, noteW + (IS_WHITE[qpc] ? whiteW * 0.3 : 0), H);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UI UPDATES
+// ═══════════════════════════════════════════════════════════════
+function midiToName(note) {
+  return NOTE_NAMES[((note % 12) + 12) % 12] + (Math.floor(note / 12) - 1);
+}
+
+function bendToCents(bendValue) {
+  return Math.round((bendValue - 8192) / 8191 * params.pitchBendRangeSemitones * 100);
+}
+
+function updateUI() {
+  const u = uiState;
+
+  document.getElementById('m-raw-freq').textContent =
+    u.rawFreq > 0 ? u.rawFreq.toFixed(1) + ' Hz' : '— Hz';
+  document.getElementById('m-smooth-freq').textContent =
+    u.smoothedFreq > 0 ? u.smoothedFreq.toFixed(1) + ' Hz' : '— Hz';
+  document.getElementById('m-exact-note').textContent =
+    u.exactNote > 0 ? u.exactNote.toFixed(2) : '—';
+  document.getElementById('m-quant-note').textContent =
+    u.quantNote > 0 ? midiToName(u.quantNote) + ' (' + u.quantNote + ')' : '—';
+
+  const devCents = u.deviationCents;
+  const devEl = document.getElementById('m-deviation');
+  devEl.textContent = u.exactNote > 0 ? (devCents >= 0 ? '+' : '') + Math.round(devCents) + ' ¢' : '— ¢';
+  devEl.style.color = Math.abs(devCents) > 15 ? '#ff6b6b' : '#E8E6E3';
+
+  document.getElementById('m-conf').textContent =
+    u.confidence > 0 ? u.confidence.toFixed(3) : '—';
+  document.getElementById('m-onset-count').textContent = u.onsetCount;
+  document.getElementById('m-release-count').textContent = u.releaseCount;
+  const fixEl = document.getElementById('m-octave-fix');
+  fixEl.textContent = u.octaveFix || '—';
+  fixEl.style.color = (u.octaveFix && u.octaveFix !== '—') ? '#ff9944' : '#555';
+
+  // Bend bar
+  const bendCents = bendToCents(u.bendValue);
+  document.getElementById('bend-val-label').textContent =
+    (bendCents >= 0 ? '+' : '') + bendCents + '¢';
+  const pct = (u.bendValue - 8192) / 8191; // -1 to +1
+  const fillEl = document.getElementById('bend-bar-fill');
+  if (pct >= 0) {
+    fillEl.style.left = '50%';
+    fillEl.style.width = (pct * 50) + '%';
+  } else {
+    fillEl.style.left = (50 + pct * 50) + '%';
+    fillEl.style.width = (-pct * 50) + '%';
+  }
+
+  // RMS bar
+  const rmsDisplay = Math.min(1, u.rms / 0.05);
+  document.getElementById('rms-bar-fill').style.width = (rmsDisplay * 100) + '%';
+  const rmsColor = u.rms > params.onsetThreshold ? '#4caf50' : '#555';
+  document.getElementById('rms-bar-fill').style.background = rmsColor;
+
+  // Note state
+  const stateEl = document.getElementById('note-state');
+  stateEl.textContent = u.noteStateName;
+  stateEl.className = u.noteStateName === 'SOUNDING' ? 'sounding' : '';
+
+  drawPiano();
+  requestAnimationFrame(updateUI);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUDIO
+// ═══════════════════════════════════════════════════════════════
+let audioCtx = null, processor = null, stream = null;
+const YIN_SIZE = 2048;
+let ringBuf = new Float32Array(YIN_SIZE);
+let ringIdx = 0;
+let rmsSmooth = 0;
+
+async function toggleAudio() {
+  const btn = document.getElementById('start-btn');
+  if (audioCtx) {
+    stopAudio();
+    btn.textContent = 'Start Mic';
+    document.getElementById('status-dot').classList.remove('active');
+    document.getElementById('status-text').textContent = 'Mic off';
+    return;
+  }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        latency: 0,
+      }
+    });
+
+    audioCtx = new AudioContext({ sampleRate: 44100 });
+    const source = audioCtx.createMediaStreamSource(stream);
+
+    // Use ScriptProcessor for simplicity (deprecated but universally supported)
+    processor = audioCtx.createScriptProcessor(256, 1, 1);
+    processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      const SR = audioCtx.sampleRate;
+
+      // RMS of this chunk
+      let rmsSum = 0;
+      for (let i = 0; i < input.length; i++) rmsSum += input[i] * input[i];
+      const rawRMS = Math.sqrt(rmsSum / input.length);
+      rmsSmooth = 0.6 * rawRMS + 0.4 * rmsSmooth;
+
+      // Append to ring buffer
+      for (let i = 0; i < input.length; i++) {
+        ringBuf[ringIdx % YIN_SIZE] = input[i];
+        ringIdx++;
+      }
+      if (ringIdx < YIN_SIZE) return;
+
+      // Build contiguous snapshot
+      const snap = new Float32Array(YIN_SIZE);
+      const start = ringIdx % YIN_SIZE;
+      for (let i = 0; i < YIN_SIZE; i++) snap[i] = ringBuf[(start + i) % YIN_SIZE];
+
+      const { frequency, probability } = yinDetect(snap, SR);
+      const freq = probability > 0.5 ? frequency : 0;
+
+      trackerProcess(freq, probability, rmsSmooth);
+    };
+
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+
+    btn.textContent = 'Stop Mic';
+    document.getElementById('status-dot').classList.add('active');
+    document.getElementById('status-text').textContent = 'Listening…';
+  } catch (err) {
+    alert('Mic error: ' + err.message);
+  }
+}
+
+function stopAudio() {
+  if (processor) { processor.disconnect(); processor = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  smoothedFreq = 0; rmsSmooth = 0;
+  trackerState = { type: 'silent' };
+  uiState = { rawFreq:0, smoothedFreq:0, confidence:0, rms:0,
+    exactNote:0, quantNote:0, deviationCents:0, midiNote:null,
+    bendValue:8192, noteStateName:'SILENT', onsetCount:0, releaseCount:0 };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CANVAS RESIZE
+// ═══════════════════════════════════════════════════════════════
+function resizeCanvas() {
+  const wrap = document.getElementById('piano-wrap');
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Start render loop
+requestAnimationFrame(updateUI);
+</script>
+</body>
+</html>

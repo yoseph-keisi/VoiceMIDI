@@ -111,6 +111,19 @@ class NoteTracker {
 
             guard smoothedFrequency > 0 else { return }
 
+            // ── Octave error correction ──────────────────────────────────────
+            // YIN on a voiced signal can latch onto ÷2 or ÷3 of the true frequency.
+            // If correcting by ×mult lands within 35 cents of the current note, apply it.
+            let refFreq = Float(440.0 * pow(2.0, Double(currentNote - 69) / 12.0))
+            for mult in [2, 3, 4] {
+                let corrected = smoothedFrequency * Float(mult)
+                let centsDiff = abs(1200.0 * Float(log2(Double(corrected / refFreq))))
+                if centsDiff < 35.0 {
+                    smoothedFrequency = corrected
+                    break
+                }
+            }
+
             // Deviation in semitones from the currently sounding note
             let exactNote = Float(69.0 + 12.0 * log2(Double(smoothedFrequency) / 440.0))
             let deviation = exactNote - Float(currentNote)
