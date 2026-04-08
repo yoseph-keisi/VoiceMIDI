@@ -11,23 +11,23 @@ class NoteTracker {
     var midiEngine: MIDIEngine
     var midiConfig: MIDIConfig
 
-    // Smoothed frequency — EMA applied here so NoteTracker owns pitch stability
+    // EMA-smoothed frequency — owned here so it resets correctly on state transitions
     private var smoothedFrequency: Float = 0
 
-    // Onset: require N consecutive stable frames before note-on
-    private var onsetDebounceCount: Int = 0
-    private let onsetDebounceRequired = 4   // ~12ms at 128-sample buffer
-    private var pendingNote: UInt8 = 0
+    // Onset debounce: N stable frames before note-on
+    private var onsetCount: Int = 0
+    private var onsetNote: UInt8 = 0
 
-    // Release holdoff: require N consecutive below-threshold frames before note-off
-    private var releaseHoldCount: Int = 0
+    // Release holdoff: N consecutive release-condition frames before note-off
+    // Short — just enough to ride over a single dip (~6ms at 128-sample buffer)
+    private var releaseCount: Int = 0
 
-    // Note-change debounce while sounding: require N frames at the new note before retriggering
+    // Note-change debounce while sounding
     private var noteChangeCount: Int = 0
-    private var pendingNewNote: UInt8 = 0
+    private var noteChangePending: UInt8 = 0
 
-    // Last sent bend value — used for smoothing
-    private var lastBendValue: UInt16 = 8192
+    // Last sent pitch bend (for smoothing)
+    private var lastBend: UInt16 = 8192
 
     init(scaleQuantizer: ScaleQuantizer, midiEngine: MIDIEngine, midiConfig: MIDIConfig) {
         self.scaleQuantizer = scaleQuantizer
@@ -37,145 +37,133 @@ class NoteTracker {
 
     func process(frequency: Float, confidence: Float, rms: Float) {
         let channel = midiConfig.midiChannel
+        let alpha = midiConfig.frequencySmoothingAlpha
 
-        // --- Frequency smoothing (EMA) ---
-        // Only update smoothed frequency when we have a valid pitch reading.
-        // When invalid, hold last value so it doesn't snap to zero.
+        // Update smoothed frequency only when YIN gives a valid reading
         if frequency > 0 && confidence > 0.5 {
-            let alpha = midiConfig.frequencySmoothingAlpha
-            if smoothedFrequency == 0 {
-                smoothedFrequency = frequency  // cold start
-            } else {
-                smoothedFrequency = alpha * frequency + (1 - alpha) * smoothedFrequency
-            }
+            smoothedFrequency = smoothedFrequency == 0
+                ? frequency
+                : alpha * frequency + (1 - alpha) * smoothedFrequency
         }
 
         switch state {
 
         // ── SILENT ──────────────────────────────────────────────────────────────
         case .silent:
-            // Reset release counter so it doesn't carry over
-            releaseHoldCount = 0
+            releaseCount = 0
+            let validPitch = smoothedFrequency > 0 && confidence > midiConfig.confidenceThreshold
+            let loudEnough = rms > midiConfig.onsetThreshold
 
-            guard rms > midiConfig.onsetThreshold,
-                  confidence > midiConfig.confidenceThreshold,
-                  smoothedFrequency > 0 else {
-                onsetDebounceCount = 0
-                pendingNote = 0
+            guard validPitch && loudEnough else {
+                onsetCount = 0
+                onsetNote = 0
                 return
             }
 
-            let (quantizedNote, _) = scaleQuantizer.quantize(frequency: smoothedFrequency)
-            let note = UInt8(max(0, min(127, quantizedNote)))
+            let (q, _) = scaleQuantizer.quantize(frequency: smoothedFrequency)
+            let note = UInt8(max(0, min(127, q)))
 
-            if note == pendingNote {
-                onsetDebounceCount += 1
+            if note == onsetNote {
+                onsetCount += 1
             } else {
-                pendingNote = note
-                onsetDebounceCount = 1
+                onsetNote = note
+                onsetCount = 1
             }
 
-            if onsetDebounceCount >= onsetDebounceRequired {
-                // Fire note-on with center pitch bend (no pre-bend wobble on attack)
-                lastBendValue = 8192
-                midiEngine.sendPitchBend(value: 8192, channel: channel)
-                let velocity = velocityFromRMS(rms)
-                midiEngine.sendNoteOn(note: pendingNote, velocity: velocity, channel: channel)
-                state = .sounding(currentNote: pendingNote)
-                smoothedFrequency = frequency  // re-anchor on actual onset frequency
-                onsetDebounceCount = 0
-                noteChangeCount = 0
-                pendingNewNote = 0
-            }
+            guard onsetCount >= 3 else { return }  // ~9ms debounce — enough to reject noise spikes
+
+            lastBend = 8192
+            midiEngine.sendPitchBend(value: 8192, channel: channel)
+            midiEngine.sendNoteOn(note: onsetNote, velocity: velocityFromRMS(rms), channel: channel)
+            state = .sounding(currentNote: onsetNote)
+            smoothedFrequency = frequency  // re-anchor to actual onset pitch
+            onsetCount = 0
+            noteChangeCount = 0
+            noteChangePending = 0
 
         // ── SOUNDING ────────────────────────────────────────────────────────────
         case .sounding(let currentNote):
-            let releaseConfThreshold = midiConfig.confidenceThreshold * 0.65
 
-            // Release condition check (with holdoff)
-            let shouldRelease = rms < midiConfig.releaseThreshold ||
-                                (confidence < releaseConfThreshold && smoothedFrequency == 0)
+            // Release condition:
+            // Primary — confidence collapses (user stopped singing, even with ambient noise)
+            // Secondary — RMS drops below threshold
+            // Either one counts. A brief dip is forgiven by the holdoff counter.
+            let confRelease = confidence < midiConfig.confidenceThreshold * 0.60
+            let rmsRelease  = rms < midiConfig.releaseThreshold
 
-            if shouldRelease {
-                releaseHoldCount += 1
-                if releaseHoldCount >= midiConfig.releaseHoldFrames {
+            if confRelease || rmsRelease {
+                releaseCount += 1
+                if releaseCount >= midiConfig.releaseHoldFrames {
                     midiEngine.sendNoteOff(note: currentNote, channel: channel)
                     midiEngine.sendPitchBend(value: 8192, channel: channel)
                     state = .silent
                     smoothedFrequency = 0
-                    onsetDebounceCount = 0
+                    lastBend = 8192
+                    onsetCount = 0
                     noteChangeCount = 0
-                    pendingNewNote = 0
-                    lastBendValue = 8192
+                    noteChangePending = 0
                 }
-                // While counting down, keep sending expression but don't update note
+                // Don't update pitch or expression while coasting toward release
                 return
             } else {
-                // Condition cleared — reset release counter
-                releaseHoldCount = 0
+                releaseCount = 0
             }
 
-            guard confidence > releaseConfThreshold, smoothedFrequency > 0 else { return }
+            guard smoothedFrequency > 0 else { return }
 
-            // --- Compute deviation from the CURRENT note (not re-quantizing every frame) ---
-            // This prevents scale-boundary flipping from causing false retriggers.
-            let exactNote = 69.0 + 12.0 * log2(Double(smoothedFrequency) / 440.0)
-            let deviationSemitones = Float(exactNote) - Float(currentNote)
+            // Deviation in semitones from the currently sounding note
+            let exactNote = Float(69.0 + 12.0 * log2(Double(smoothedFrequency) / 440.0))
+            let deviation = exactNote - Float(currentNote)
 
-            // --- Pitch bend with dead zone ---
-            let bend: UInt16
+            // ── Pitch bend with dead zone ───────────────────────────────────────
             let deadZone = midiConfig.pitchBendDeadZoneSemitones
-            if abs(deviationSemitones) < deadZone {
-                // Within dead zone — snap to center, no wobble
-                bend = 8192
+            let targetBend: UInt16
+            if abs(deviation) < deadZone {
+                targetBend = 8192
             } else {
-                // Outside dead zone — apply bend, but shrink by the dead zone so it starts from 0
-                let adjustedDeviation = deviationSemitones > 0
-                    ? deviationSemitones - deadZone
-                    : deviationSemitones + deadZone
-                bend = pitchBendValue(semitoneOffset: adjustedDeviation)
+                let adj = deviation > 0 ? deviation - deadZone : deviation + deadZone
+                targetBend = pitchBendValue(semitoneOffset: adj)
             }
 
-            // Smooth the bend value to avoid steppy transitions
-            let smoothedBend = UInt16((Int(lastBendValue) * 3 + Int(bend)) / 4)
-            if smoothedBend != lastBendValue {
-                midiEngine.sendPitchBend(value: smoothedBend, channel: channel)
-                lastBendValue = smoothedBend
+            // Light IIR smoothing on bend to prevent stepping
+            let newBend = UInt16((Int(lastBend) * 2 + Int(targetBend)) / 3)
+            if newBend != lastBend {
+                midiEngine.sendPitchBend(value: newBend, channel: channel)
+                lastBend = newBend
             }
 
-            // --- Note change detection ---
-            // Only retrigger if deviation is large AND sustained for N frames
-            let threshold = midiConfig.retriggerSemitoneThreshold
+            // ── Note change ─────────────────────────────────────────────────────
+            if !midiConfig.glideMode && abs(deviation) >= midiConfig.retriggerSemitoneThreshold {
+                let (q, _) = scaleQuantizer.quantize(frequency: smoothedFrequency)
+                let newNote = UInt8(max(0, min(127, q)))
+                guard newNote != currentNote else {
+                    noteChangeCount = 0
+                    noteChangePending = 0
+                    return
+                }
 
-            if abs(deviationSemitones) >= threshold && !midiConfig.glideMode {
-                // Determine target note (quantized to scale)
-                let (quantizedNote, _) = scaleQuantizer.quantize(frequency: smoothedFrequency)
-                let newNote = UInt8(max(0, min(127, quantizedNote)))
-
-                if newNote == pendingNewNote && newNote != currentNote {
+                if newNote == noteChangePending {
                     noteChangeCount += 1
                 } else {
-                    pendingNewNote = newNote
-                    noteChangeCount = newNote != currentNote ? 1 : 0
+                    noteChangePending = newNote
+                    noteChangeCount = 1
                 }
 
                 if noteChangeCount >= midiConfig.retriggerDebounceFrames {
                     midiEngine.sendNoteOff(note: currentNote, channel: channel)
                     midiEngine.sendPitchBend(value: 8192, channel: channel)
-                    let velocity = velocityFromRMS(rms)
-                    midiEngine.sendNoteOn(note: newNote, velocity: velocity, channel: channel)
+                    midiEngine.sendNoteOn(note: newNote, velocity: velocityFromRMS(rms), channel: channel)
                     state = .sounding(currentNote: newNote)
-                    lastBendValue = 8192
+                    lastBend = 8192
                     noteChangeCount = 0
-                    pendingNewNote = 0
+                    noteChangePending = 0
                 }
             } else {
-                // Back within range — reset change counter
                 noteChangeCount = 0
-                pendingNewNote = 0
+                noteChangePending = 0
             }
 
-            // --- Expression CC 11 ---
+            // ── Expression CC 11 ────────────────────────────────────────────────
             if midiConfig.sendExpression {
                 let expr = UInt8(min(127, max(0, Int(rms * midiConfig.velocitySensitivity * 0.4))))
                 midiEngine.sendCC(controller: 11, value: expr, channel: channel)
@@ -183,18 +171,14 @@ class NoteTracker {
         }
     }
 
-    // MARK: - Helpers
-
     private func pitchBendValue(semitoneOffset: Float) -> UInt16 {
         let range = Float(midiConfig.pitchBendRangeSemitones)
         let clamped = max(-range, min(range, semitoneOffset))
-        let normalized = clamped / range
-        let value = 8192.0 + normalized * 8191.0
+        let value = 8192.0 + (clamped / range) * 8191.0
         return UInt16(max(0, min(16383, Int(value.rounded()))))
     }
 
     private func velocityFromRMS(_ rms: Float) -> UInt8 {
-        let raw = rms * midiConfig.velocitySensitivity
-        return UInt8(min(127, max(1, Int(raw))))
+        UInt8(min(127, max(1, Int(rms * midiConfig.velocitySensitivity))))
     }
 }

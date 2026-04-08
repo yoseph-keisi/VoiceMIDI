@@ -12,10 +12,9 @@ class AudioEngine: ObservableObject {
     private let sampleRate: Int32 = 44100
     private let tapBufferSize: AVAudioFrameCount = 128
 
-    // Peak-follower RMS: fast attack, slow release — prevents release from firing on transient dips
+    // Moderate RMS smoothing — fast enough to track dynamics, not so slow it masks silence
     private var smoothedRMS: Float = 0
-    private let rmsAttack: Float = 1.0      // Instant attack
-    private let rmsRelease: Float = 0.92    // ~40ms release at 128-sample callbacks
+    private let rmsSmoothing: Float = 0.6   // 0=frozen, 1=raw. 0.6 ≈ 7ms time constant
 
     @Published var currentFrequency: Float = 0
     @Published var confidence: Float = 0
@@ -76,13 +75,8 @@ class AudioEngine: ObservableObject {
         }
         rawRMS = sqrtf(rawRMS / Float(frameCount))
 
-        // Peak follower: attack fast, release slow
-        // This prevents a single quiet frame from prematurely releasing a note
-        if rawRMS >= smoothedRMS {
-            smoothedRMS = rawRMS
-        } else {
-            smoothedRMS = rmsRelease * smoothedRMS
-        }
+        // Moderate smoothing — tracks dynamics faithfully while reducing single-frame spikes
+        smoothedRMS = rmsSmoothing * rawRMS + (1 - rmsSmoothing) * smoothedRMS
 
         // Append to sliding ring buffer
         for i in 0..<frameCount {
